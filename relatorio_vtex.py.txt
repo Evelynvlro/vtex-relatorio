@@ -1,0 +1,162 @@
+import requests
+import csv
+import time
+import urllib3
+
+# Desabilitar aviso de SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+ACCOUNT = "americanas"
+
+APP_KEY = "sua chave Appkey aqui"
+APP_TOKEN = "sua chave apptokrn aqui"
+HEADERS = {
+    "X-VTEX-API-AppKey": APP_KEY,
+    "X-VTEX-API-AppToken": APP_TOKEN
+}
+
+BASE_URL = f"https://{ACCOUNTpython3 relatorio_vtex.py}.vtexcommercestable.com.br"
+
+
+def search_products(params):
+    url = f"{BASE_URL}/api/catalog_system/pub/products/search"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json"
+    }
+
+    response = requests.get(url, params=params, headers=headers, verify=False)
+
+    if response.status_code not in [200, 206]:
+        print(f"Erro na API: {response.status_code}")
+        print(response.text)
+        
+        return []
+
+    try:
+        return response.json()
+    except Exception as e:
+        print(f"Erro ao converter JSON: {e}")
+        
+        return []
+
+
+def get_product(product_id):
+    url = f"{BASE_URL}/api/catalog/pvt/product/{product_id}"
+    try:
+        res = requests.get(url, headers=HEADERS, verify=False)
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except Exception as e:
+        print(f"Erro ao buscar produto {product_id}: {e}")
+        return None
+
+
+def get_sku(sku_id):
+    url = f"{BASE_URL}/api/catalog/pvt/stockkeepingunit/{sku_id}"
+    try:
+        res = requests.get(url, headers=HEADERS, verify=False)
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except Exception as e:
+        print(f"Erro ao buscar SKU {sku_id}: {e}")
+        return None
+
+
+def get_price(sku_id):
+    url = f"{BASE_URL}/api/pricing/prices/{sku_id}"
+    res = requests.get(url, headers=HEADERS, verify=False)
+    return res.json() if res.status_code == 200 else None
+
+
+def get_stock(sku_id):
+    url = f"{BASE_URL}/api/logistics/pvt/inventory/skus/{sku_id}"
+    res = requests.get(url, headers=HEADERS, verify=False)
+    return res.json() if res.status_code == 200 else None
+
+
+search_configs = [
+    {"type": "category", "value": "4271"},  # Potes diversos
+    {"type": "text", "value": "condimento"}  # Porta-condimento
+    # {"type": "collection", "value": "123"},  # Exemplo de coleção
+]
+
+
+report = []
+
+for config in search_configs:
+    print(f"Buscando: {config['value']}")
+
+    start = 0
+    step = 50
+
+    while True:
+        params = {
+            "_from": start,
+            "_to": start + step - 1
+        }
+        
+        if config["type"] == "category":
+            params["fq"] = f"C:{config['value']}"
+        elif config["type"] == "collection":
+            params["fq"] = f"H:{config['value']}"
+        elif config["type"] == "text":
+            params["ft"] = config["value"]
+
+        data = search_products(params)
+
+        if not data:
+            break
+
+        for product in data:
+            product_id = product.get("productId")
+            product_name = product.get("productName", "").lower()
+
+            
+
+            product_data = get_product(product_id)
+            if not product_data or not product_data.get("IsActive"):
+                continue
+
+            for item in product.get("items", []):
+                sku_id = item.get("itemId")
+
+                sku_data = get_sku(sku_id)
+                if not sku_data or not sku_data.get("IsActive"):
+                    continue
+
+                price = get_price(sku_id)
+                if not price:
+                    continue
+
+                stock = get_stock(sku_id)
+                if not stock:
+                    continue
+
+                for seller in item.get("sellers", []):
+                    report.append({
+                        "productId": product_id,
+                        "productName": product_name,
+                        "skuId": sku_id,
+                        "seller": seller.get("sellerId"),
+                        "origem": config["value"],
+                        "price": price.get("basePrice"),
+                        "stock": str(stock)
+                    })
+
+        start += step
+        time.sleep(0.2)
+
+
+if report:
+    with open("relatorio_produtos.csv", "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=report[0].keys())
+        writer.writeheader()
+        writer.writerows(report)
+
+    print("Relatório gerado com sucesso!")
+else:
+    print("Nenhum produto encontrado.")
